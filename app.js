@@ -831,7 +831,7 @@ document.addEventListener("DOMContentLoaded", () => {
     const typingBubble = document.createElement("div");
     typingBubble.className = "chat-bubble agent";
     typingBubble.id = "chat-typing-indicator";
-    typingBubble.innerHTML = `<p><em>NaijaComply is searching legal codes...</em></p>`;
+    typingBubble.innerHTML = `<p><em>Complai is searching legal codes...</em></p>`;
     chatMsgPanel.appendChild(typingBubble);
     chatMsgPanel.scrollTop = chatMsgPanel.scrollHeight;
 

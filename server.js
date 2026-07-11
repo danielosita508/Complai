@@ -1,112 +1,104 @@
-// Nigeria Compliance Agent - Full-Stack Express Server & SQLite Database
+// Complai Compliance Agent - Full-Stack Express Server & Supabase PostgreSQL Database
 
 const express = require("express");
 const cors = require("cors");
-const sqlite3 = require("sqlite3").verbose();
+const { Pool } = require("pg");
 const path = require("path");
 const cron = require("node-cron");
 require("dotenv").config();
 
 const app = express();
 const PORT = process.env.PORT || 8080;
-const DB_FILE = process.env.DATABASE_FILE || "compliance.db";
 
 // Middleware
 app.use(cors());
 app.use(express.json());
-// Serve static frontend files from this directory
 app.use(express.static(__dirname));
 
-// Initialize Database
-const db = new sqlite3.Database(DB_FILE, (err) => {
+// Initialize PostgreSQL Connection Pool
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  ssl: { rejectUnauthorized: false } // Required for Supabase ssl connectivity
+});
+
+// Test Connection and Initialize Tables
+pool.connect((err, client, release) => {
   if (err) {
-    console.error("Database connection failed:", err.message);
+    console.error("Database connection failed:", err.stack);
   } else {
-    console.log("Connected to SQLite database:", DB_FILE);
-    db.serialize(() => {
-      // Create tables
-      db.run(`
-        CREATE TABLE IF NOT EXISTS companies (
-          id TEXT PRIMARY KEY,
-          name TEXT NOT NULL,
-          type TEXT NOT NULL,
-          sector TEXT NOT NULL,
-          incDate TEXT NOT NULL,
-          shareCapital INTEGER NOT NULL,
-          employees INTEGER NOT NULL,
-          foreign_participation TEXT NOT NULL,
-          isStartupLabelled INTEGER DEFAULT 0,
-          hasScuml INTEGER DEFAULT 0
-        )
-      `);
-
-      db.run(`
-        CREATE TABLE IF NOT EXISTS income_rows (
-          id INTEGER PRIMARY KEY AUTOINCREMENT,
-          company_id TEXT NOT NULL,
-          amount REAL NOT NULL,
-          description TEXT,
-          date TEXT NOT NULL,
-          FOREIGN KEY (company_id) REFERENCES companies (id) ON DELETE CASCADE
-        )
-      `);
-
-      db.run(`
-        CREATE TABLE IF NOT EXISTS regulatory_updates (
-          id INTEGER PRIMARY KEY AUTOINCREMENT,
-          title TEXT NOT NULL,
-          source TEXT NOT NULL,
-          content TEXT NOT NULL,
-          published_date TEXT NOT NULL
-        )
-      `);
-
-      // Seed Initial Companies if table is empty
-      db.get("SELECT COUNT(*) as count FROM companies", [], (err, row) => {
-        if (!err && row.count === 0) {
-          const insertStmt = db.prepare(`
-            INSERT INTO companies (id, name, type, sector, incDate, shareCapital, employees, foreign_participation, isStartupLabelled, hasScuml)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-          `);
-          insertStmt.run("comp-1", "Apex Tech Ventures Ltd", "LTD", "Tech Startup", "2025-02-15", 1000000, 12, "no", 1, 0);
-          insertStmt.run("comp-2", "Zenith Real Estate & Build Co", "LTD", "Real Estate", "2024-08-01", 5000000, 6, "yes", 0, 0);
-          insertStmt.finalize();
-          console.log("Seeded initial company compliance profiles.");
-        }
-      });
-
-      // Seed Regulatory Updates if empty
-      db.get("SELECT COUNT(*) as count FROM regulatory_updates", [], (err, row) => {
-        if (!err && row.count === 0) {
-          const insertStmt = db.prepare(`
-            INSERT INTO regulatory_updates (title, source, content, published_date)
-            VALUES (?, ?, ?, ?)
-          `);
-          insertStmt.run(
-            "FIRS - WHT Amendment Regulations 2025", 
-            "FIRS", 
-            "New exemptions introduced for small businesses and lowered rates on specific local service contracts. Tax calculator updated.", 
-            "2026-06-15"
-          );
-          insertStmt.run(
-            "NDPC Data Protection Enforcement", 
-            "NDPC", 
-            "Registration portal is now fully active. Audits for all labelled startups must compile data maps by early 2027.", 
-            "2026-07-02"
-          );
-          insertStmt.run(
-            "CBN Foreign Exchange Policy 2026", 
-            "CBN", 
-            "Startups with eCCIs can now utilize single-window access for capital and dividend repatriation.", 
-            "2026-07-10"
-          );
-          insertStmt.finalize();
-          console.log("Seeded initial regulatory updates.");
-        }
-      });
-    });
+    console.log("Connected to Supabase PostgreSQL database successfully.");
+    release();
+    initDb();
   }
 });
+
+async function initDb() {
+  try {
+    // Create Tables
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS companies (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        type TEXT NOT NULL,
+        sector TEXT NOT NULL,
+        inc_date TEXT NOT NULL,
+        share_capital INTEGER NOT NULL,
+        employees INTEGER NOT NULL,
+        foreign_participation TEXT NOT NULL,
+        is_startup_labelled INTEGER DEFAULT 0,
+        has_scuml INTEGER DEFAULT 0
+      )
+    `);
+
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS income_rows (
+        id SERIAL PRIMARY KEY,
+        company_id TEXT NOT NULL,
+        amount DOUBLE PRECISION NOT NULL,
+        description TEXT,
+        date TEXT NOT NULL,
+        FOREIGN KEY (company_id) REFERENCES companies (id) ON DELETE CASCADE
+      )
+    `);
+
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS regulatory_updates (
+        id SERIAL PRIMARY KEY,
+        title TEXT NOT NULL,
+        source TEXT NOT NULL,
+        content TEXT NOT NULL,
+        published_date TEXT NOT NULL
+      )
+    `);
+
+    // Seed Initial Companies if table is empty
+    const resComp = await pool.query("SELECT COUNT(*) as count FROM companies");
+    if (parseInt(resComp.rows[0].count) === 0) {
+      await pool.query(`
+        INSERT INTO companies (id, name, type, sector, inc_date, share_capital, employees, foreign_participation, is_startup_labelled, has_scuml)
+        VALUES 
+          ('comp-1', 'Apex Tech Ventures Ltd', 'LTD', 'Tech Startup', '2025-02-15', 1000000, 12, 'no', 1, 0),
+          ('comp-2', 'Zenith Real Estate & Build Co', 'LTD', 'Real Estate', '2024-08-01', 5000000, 6, 'yes', 0, 0)
+      `);
+      console.log("Seeded initial company compliance profiles.");
+    }
+
+    // Seed Regulatory Updates if empty
+    const resUpdates = await pool.query("SELECT COUNT(*) as count FROM regulatory_updates");
+    if (parseInt(resUpdates.rows[0].count) === 0) {
+      await pool.query(`
+        INSERT INTO regulatory_updates (title, source, content, published_date)
+        VALUES 
+          ('FIRS - WHT Amendment Regulations 2025', 'FIRS', 'New exemptions introduced for small businesses and lowered rates on specific local service contracts. Tax calculator updated.', '2026-06-15'),
+          ('NDPC Data Protection Enforcement', 'NDPC', 'Registration portal is now fully active. Audits for all labelled startups must compile data maps by early 2027.', '2026-07-02'),
+          ('CBN Foreign Exchange Policy 2026', 'CBN', 'Startups with eCCIs can now utilize single-window access for capital and dividend repatriation.', '2026-07-10')
+      `);
+      console.log("Seeded initial regulatory updates.");
+    }
+  } catch (err) {
+    console.error("Database schema initialization failed:", err.message);
+  }
+}
 
 // --- HELPER COMPLIANCE TIMELINE ENGINE ---
 function calculateTimelines(comp, CURRENT_DATE) {
@@ -234,33 +226,32 @@ function calculateTimelines(comp, CURRENT_DATE) {
 // --- API ENDPOINTS ---
 
 // 1. Get Companies List
-app.get("/api/companies", (req, res) => {
-  db.all("SELECT * FROM companies", [], (err, rows) => {
-    if (err) {
-      res.status(500).json({ error: err.message });
-    } else {
-      res.json(rows.map(r => ({
-        id: r.id,
-        name: r.name,
-        type: r.type,
-        sector: r.sector,
-        incDate: r.incDate,
-        shareCapital: r.shareCapital,
-        employees: r.employees,
-        foreign: r.foreign_participation,
-        isStartupLabelled: r.isStartupLabelled === 1,
-        hasScuml: r.hasScuml === 1
-      })));
-    }
-  });
+app.get("/api/companies", async (req, res) => {
+  try {
+    const result = await pool.query("SELECT * FROM companies");
+    res.json(result.rows.map(r => ({
+      id: r.id,
+      name: r.name,
+      type: r.type,
+      sector: r.sector,
+      incDate: r.inc_date,
+      shareCapital: r.share_capital,
+      employees: r.employees,
+      foreign: r.foreign_participation,
+      isStartupLabelled: r.is_startup_labelled === 1,
+      hasScuml: r.has_scuml === 1
+    })));
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // 2. Get specific Company
-app.get("/api/companies/:id", (req, res) => {
-  db.get("SELECT * FROM companies WHERE id = ?", [req.params.id], (err, row) => {
-    if (err) {
-      res.status(500).json({ error: err.message });
-    } else if (!row) {
+app.get("/api/companies/:id", async (req, res) => {
+  try {
+    const result = await pool.query("SELECT * FROM companies WHERE id = $1", [req.params.id]);
+    const row = result.rows[0];
+    if (!row) {
       res.status(404).json({ error: "Company not found" });
     } else {
       res.json({
@@ -268,19 +259,21 @@ app.get("/api/companies/:id", (req, res) => {
         name: row.name,
         type: row.type,
         sector: row.sector,
-        incDate: row.incDate,
-        shareCapital: row.shareCapital,
+        incDate: row.inc_date,
+        shareCapital: row.share_capital,
         employees: row.employees,
         foreign: row.foreign_participation,
-        isStartupLabelled: row.isStartupLabelled === 1,
-        hasScuml: row.hasScuml === 1
+        isStartupLabelled: row.is_startup_labelled === 1,
+        hasScuml: row.has_scuml === 1
       });
     }
-  });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // 3. Save or Update Company Profile
-app.post("/api/companies", (req, res) => {
+app.post("/api/companies", async (req, res) => {
   const { id, name, type, sector, incDate, shareCapital, employees, foreign, isStartupLabelled, hasScuml } = req.body;
   
   if (!id || !name || !type || !sector || !incDate) {
@@ -288,43 +281,41 @@ app.post("/api/companies", (req, res) => {
   }
 
   const query = `
-    INSERT INTO companies (id, name, type, sector, incDate, shareCapital, employees, foreign_participation, isStartupLabelled, hasScuml)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO companies (id, name, type, sector, inc_date, share_capital, employees, foreign_participation, is_startup_labelled, has_scuml)
+    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
     ON CONFLICT(id) DO UPDATE SET
-      name=excluded.name,
-      type=excluded.type,
-      sector=excluded.sector,
-      incDate=excluded.incDate,
-      shareCapital=excluded.shareCapital,
-      employees=excluded.employees,
-      foreign_participation=excluded.foreign_participation,
-      isStartupLabelled=excluded.isStartupLabelled,
-      hasScuml=excluded.hasScuml
+      name=EXCLUDED.name,
+      type=EXCLUDED.type,
+      sector=EXCLUDED.sector,
+      inc_date=EXCLUDED.inc_date,
+      share_capital=EXCLUDED.share_capital,
+      employees=EXCLUDED.employees,
+      foreign_participation=EXCLUDED.foreign_participation,
+      is_startup_labelled=EXCLUDED.is_startup_labelled,
+      has_scuml=EXCLUDED.has_scuml
   `;
 
-  db.run(query, [
-    id, name, type, sector, incDate, 
-    shareCapital || 1000000, 
-    employees || 0, 
-    foreign || "no", 
-    isStartupLabelled ? 1 : 0, 
-    hasScuml ? 1 : 0
-  ], function(err) {
-    if (err) {
-      res.status(500).json({ error: err.message });
-    } else {
-      res.json({ success: true, companyId: id });
-    }
-  });
+  try {
+    await pool.query(query, [
+      id, name, type, sector, incDate, 
+      shareCapital || 1000000, 
+      employees || 0, 
+      foreign || "no", 
+      isStartupLabelled ? 1 : 0, 
+      hasScuml ? 1 : 0
+    ]);
+    res.json({ success: true, companyId: id });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // 4. Calculate Timelines & Score dynamically
-app.get("/api/companies/:id/timelines", (req, res) => {
+app.get("/api/companies/:id/timelines", async (req, res) => {
   const compId = req.params.id;
-  db.get("SELECT * FROM companies WHERE id = ?", [compId], (err, row) => {
-    if (err) {
-      return res.status(500).json({ error: err.message });
-    }
+  try {
+    const result = await pool.query("SELECT * FROM companies WHERE id = $1", [compId]);
+    const row = result.rows[0];
     if (!row) {
       return res.status(404).json({ error: "Company not found" });
     }
@@ -334,12 +325,12 @@ app.get("/api/companies/:id/timelines", (req, res) => {
       name: row.name,
       type: row.type,
       sector: row.sector,
-      incDate: row.incDate,
-      shareCapital: row.shareCapital,
+      incDate: row.inc_date,
+      shareCapital: row.share_capital,
       employees: row.employees,
       foreign_participation: row.foreign_participation,
-      isStartupLabelled: row.isStartupLabelled === 1,
-      hasScuml: row.hasScuml === 1
+      isStartupLabelled: row.is_startup_labelled === 1,
+      hasScuml: row.has_scuml === 1
     };
 
     const CURRENT_DATE = new Date("2026-07-11T16:28:24+01:00");
@@ -371,22 +362,23 @@ app.get("/api/companies/:id/timelines", (req, res) => {
       pendingCount,
       timelines
     });
-  });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // 5. Get Company Active Income Rows
-app.get("/api/companies/:id/income", (req, res) => {
-  db.all("SELECT * FROM income_rows WHERE company_id = ? ORDER BY date DESC", [req.params.id], (err, rows) => {
-    if (err) {
-      res.status(500).json({ error: err.message });
-    } else {
-      res.json(rows);
-    }
-  });
+app.get("/api/companies/:id/income", async (req, res) => {
+  try {
+    const result = await pool.query("SELECT * FROM income_rows WHERE company_id = $1 ORDER BY date DESC", [req.params.id]);
+    res.json(result.rows);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
-// 6. Add Company Income Row (Calculators linkage)
-app.post("/api/companies/:id/income", (req, res) => {
+// 6. Add Company Income Row
+app.post("/api/companies/:id/income", async (req, res) => {
   const { amount, description, date } = req.body;
   const company_id = req.params.id;
 
@@ -394,17 +386,15 @@ app.post("/api/companies/:id/income", (req, res) => {
     return res.status(400).json({ error: "Amount and date required" });
   }
 
-  db.run(
-    "INSERT INTO income_rows (company_id, amount, description, date) VALUES (?, ?, ?, ?)",
-    [company_id, amount, description || "", date],
-    function(err) {
-      if (err) {
-        res.status(500).json({ error: err.message });
-      } else {
-        res.json({ id: this.lastID, success: true });
-      }
-    }
-  );
+  try {
+    const result = await pool.query(
+      "INSERT INTO income_rows (company_id, amount, description, date) VALUES ($1, $2, $3, $4) RETURNING id",
+      [company_id, amount, description || "", date]
+    );
+    res.json({ id: result.rows[0].id, success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // 7. AI Law Advisor Groq Router with Graceful Fallback
@@ -419,15 +409,13 @@ app.post("/api/compliance/advisor", async (req, res) => {
   const isPlaceholder = !apiKey || apiKey.includes("placeholder") || apiKey.includes("your-groq");
 
   if (isPlaceholder) {
-    // Graceful fallback to local matching logic
     console.log("Using Local Legal Engine Fallback (Groq API Key is a placeholder).");
     const localAnswer = generateLocalLegalResponse(query, companyProfile);
     return res.json({ answer: localAnswer, source: "Local Legal Matching Engine" });
   }
 
-  // Active Groq Integration
   try {
-    const systemPrompt = `You are NaijaComply, a world-class legal AI specializing in Nigerian Startup and Corporate Compliance. 
+    const systemPrompt = `You are Complai, a world-class legal AI specializing in Nigerian Startup and Corporate Compliance. 
 Your database is fully seeded with the Companies and Allied Matters Act (CAMA) 2020, Nigeria Startup Act 2022, Investment and Securities Act (ISA) 2007, Labor Act Cap L1, Pension Reform Act 2014, and Special Control Unit Against Money Laundering (SCUML) guidelines.
 
 The user is managing a company with the following profile:
@@ -474,14 +462,13 @@ Provide professional, structured compliance milestones, due dates, penalty risks
 });
 
 // 8. Regulatory Updates Feed
-app.get("/api/compliance/updates", (req, res) => {
-  db.all("SELECT * FROM regulatory_updates ORDER BY published_date DESC", [], (err, rows) => {
-    if (err) {
-      res.status(500).json({ error: err.message });
-    } else {
-      res.json(rows);
-    }
-  });
+app.get("/api/compliance/updates", async (req, res) => {
+  try {
+    const result = await pool.query("SELECT * FROM regulatory_updates ORDER BY published_date DESC");
+    res.json(result.rows);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // 9. CAC VAS Mappings Registration Endpoint
@@ -492,10 +479,9 @@ app.post("/api/compliance/register", (req, res) => {
     return res.status(400).json({ error: "Missing registration parameters" });
   }
 
-  // Exact JSON structures mapped to official CAC VAS (Value Added Services) schema
   const vasPayload = {
     requestMetadata: {
-      sourceAgent: "NaijaComply-VAS-Portal",
+      sourceAgent: "Complai-VAS-Portal",
       timestamp: new Date().toISOString(),
       countryCode: "NG"
     },
@@ -508,7 +494,7 @@ app.post("/api/compliance/register", (req, res) => {
       ],
       registeredOffice: {
         addressLine1: address,
-        state: "Lagos", // Default mock state
+        state: "Lagos",
         country: "Nigeria"
       },
       directorsList: directors.map((d, idx) => ({
@@ -523,7 +509,7 @@ app.post("/api/compliance/register", (req, res) => {
         }
       })),
       stampDutyInfo: {
-        stampValue: (parseInt(shareCapital) || 1000000) * 0.0075, // FIRS 0.75% stamp duty
+        stampValue: (parseInt(shareCapital) || 1000000) * 0.0075,
         stampRemitaRef: "RRR-" + Math.floor(Math.random() * 900000000 + 100000000)
       }
     }
@@ -577,35 +563,48 @@ For foreign nationals, the Ministry of Interior requires an **Expatriate Quota**
 • **Transfer Pricing:** Salaries paid to secondments from parent firms must conform to the FIRS TP Regulations 2018.`;
   }
 
-  return `**NaijaComply Legal Advisory:**\n
+  return `**Complai Legal Advisory:**\n
 Based on your company sector (*${profile?.sector || "N/A"}*) and entity structure (*${profile?.type || "LTD"}*), you must track monthly FIRS VAT (due 21st), State PAYE (due 10th), and Pension filings (due 7th).\n
 Let me know if you would like me to draft a contract or compile step-by-step checklists for your next compliance audit.`;
 }
 
 // --- BACKGROUND WORKER SIMULATION ---
-// Runs every hour to calculate scores and simulate alerts
-cron.schedule("0 * * * *", () => {
+cron.schedule("0 * * * *", async () => {
   console.log("[BACKGROUND WORKER] Scanning corporate database for filing deadlines...");
-  db.all("SELECT * FROM companies", [], (err, rows) => {
-    if (!err) {
-      rows.forEach(r => {
-        const CURRENT_DATE = new Date("2026-07-11T16:28:24+01:00");
-        const timelines = calculateTimelines(r, CURRENT_DATE);
-        let score = 100;
-        timelines.forEach(t => {
-          if (t.status === "overdue") score -= t.scoreImpact;
-        });
-        const dnfbps = ["Real Estate", "Professional Services", "General Trade"];
-        if (dnfbps.includes(r.sector) && r.hasScuml === 0) score -= 15;
-        score = Math.max(score, 10);
-        
-        console.log(`[BACKGROUND WORKER] Company: ${r.name} | Compliance Score: ${score}% | Overdue checks complete.`);
+  try {
+    const result = await pool.query("SELECT * FROM companies");
+    result.rows.forEach(r => {
+      const company = {
+        id: r.id,
+        name: r.name,
+        type: r.type,
+        sector: r.sector,
+        incDate: r.inc_date,
+        shareCapital: r.share_capital,
+        employees: r.employees,
+        foreign_participation: r.foreign_participation,
+        isStartupLabelled: r.is_startup_labelled === 1,
+        hasScuml: r.has_scuml === 1
+      };
+      
+      const CURRENT_DATE = new Date("2026-07-11T16:28:24+01:00");
+      const timelines = calculateTimelines(company, CURRENT_DATE);
+      let score = 100;
+      timelines.forEach(t => {
+        if (t.status === "overdue") score -= t.scoreImpact;
       });
-    }
-  });
+      const dnfbps = ["Real Estate", "Professional Services", "General Trade"];
+      if (dnfbps.includes(company.sector) && company.hasScuml === 0) score -= 15;
+      score = Math.max(score, 10);
+      
+      console.log(`[BACKGROUND WORKER] Company: ${company.name} | Compliance Score: ${score}% | Overdue checks complete.`);
+    });
+  } catch (err) {
+    console.error("[BACKGROUND WORKER] Failed to scan database:", err.message);
+  }
 });
 
 // Start Server
 app.listen(PORT, () => {
-  console.log(`NaijaComply full-stack server running at http://localhost:${PORT}`);
+  console.log(`Complai full-stack server running at http://localhost:${PORT}`);
 });
