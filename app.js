@@ -149,11 +149,43 @@ document.addEventListener("DOMContentLoaded", () => {
   async function fetchCompanies() {
     try {
       const res = await fetch("/api/companies");
-      companies = await res.json();
-      populateCompanySelector();
+      if (!res.ok) throw new Error("API status " + res.status);
+      const data = await res.json();
+      if (Array.isArray(data)) {
+        companies = data;
+      } else {
+        throw new Error("API did not return array");
+      }
     } catch (e) {
-      console.error("Failed to load companies:", e);
+      console.warn("Failed to load companies, using local fallback:", e);
+      companies = [
+        {
+          id: "comp-1",
+          name: "Apex Tech Ventures Ltd",
+          type: "LTD",
+          sector: "Tech Startup",
+          incDate: "2025-02-15",
+          shareCapital: 1000000,
+          employees: 12,
+          foreign: "no",
+          isStartupLabelled: true,
+          hasScuml: false
+        },
+        {
+          id: "comp-2",
+          name: "Zenith Real Estate & Build Co",
+          type: "LTD",
+          sector: "Real Estate",
+          incDate: "2024-08-01",
+          shareCapital: 5000000,
+          employees: 6,
+          foreign: "yes",
+          isStartupLabelled: false,
+          hasScuml: false
+        }
+      ];
     }
+    populateCompanySelector();
   }
 
   function populateCompanySelector() {
@@ -255,19 +287,173 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   // --- COMPLIANCE ENGINE & ROADMAP TIMELINE ---
+  function calculateLocalTimelines(comp, CURRENT_DATE) {
+    const timelines = [];
+    const incDateObj = new Date(comp.incDate || comp.inc_date || "2025-02-15");
+    const foreign = comp.foreign || comp.foreign_participation || "no";
+    const hasScuml = comp.hasScuml || comp.has_scuml || false;
+
+    // 1. CAC Annual Returns
+    let cacDueDate = new Date(incDateObj);
+    cacDueDate.setMonth(cacDueDate.getMonth() + 18);
+    const isOverdueCAC = CURRENT_DATE > cacDueDate;
+    timelines.push({
+      id: "cac_returns",
+      name: "CAC Annual Returns Filing",
+      description: "Mandatory corporate tax return and financial details filing to retain company registration.",
+      dueDate: cacDueDate.toISOString().split('T')[0],
+      status: isOverdueCAC ? "overdue" : "pending",
+      badgeType: isOverdueCAC ? "badge-urgent" : "badge-upcoming",
+      scoreImpact: 20
+    });
+
+    // 2. FIRS CIT
+    let citDueDate = new Date(CURRENT_DATE.getFullYear(), 5, 30);
+    if (CURRENT_DATE > citDueDate) {
+      citDueDate = new Date(CURRENT_DATE.getFullYear() + 1, 5, 30);
+    }
+    timelines.push({
+      id: "firs_cit",
+      name: "FIRS Companies Income Tax (CIT)",
+      description: "Annual filing of corporate tax computations based on the previous year's financials.",
+      dueDate: citDueDate.toISOString().split('T')[0],
+      status: "pending",
+      badgeType: "badge-routine",
+      scoreImpact: 15
+    });
+
+    // 3. FIRS VAT (21st of every month)
+    let vatDueDate = new Date(CURRENT_DATE.getFullYear(), CURRENT_DATE.getMonth(), 21);
+    if (CURRENT_DATE > vatDueDate) {
+      vatDueDate = new Date(CURRENT_DATE.getFullYear(), CURRENT_DATE.getMonth() + 1, 21);
+    }
+    timelines.push({
+      id: "firs_vat",
+      name: "Monthly FIRS VAT Remittance",
+      description: "Monthly collection and filing of 7.5% Value Added Tax on eligible goods and services.",
+      dueDate: vatDueDate.toISOString().split('T')[0],
+      status: "pending",
+      badgeType: "badge-routine",
+      scoreImpact: 10
+    });
+
+    // 4. PAYE Tax (10th of every month)
+    let payeDueDate = new Date(CURRENT_DATE.getFullYear(), CURRENT_DATE.getMonth(), 10);
+    if (CURRENT_DATE > payeDueDate) {
+      payeDueDate = new Date(CURRENT_DATE.getFullYear(), CURRENT_DATE.getMonth() + 1, 10);
+    }
+    timelines.push({
+      id: "paye_tax",
+      name: "Monthly PAYE Income Tax Remittance",
+      description: "Employer withholding of employees' progressive income tax paid to the State IRS.",
+      dueDate: payeDueDate.toISOString().split('T')[0],
+      status: "pending",
+      badgeType: "badge-routine",
+      scoreImpact: 10
+    });
+
+    // 5. Pension Remittance
+    let pensionDueDate = new Date(CURRENT_DATE.getFullYear(), CURRENT_DATE.getMonth() + 1, 7);
+    timelines.push({
+      id: "pension_pra",
+      name: "Monthly PenCom Pension Remittance",
+      description: "Combined 18% contribution (10% employer, 8% employee) to employee Pension Fund Accounts.",
+      dueDate: pensionDueDate.toISOString().split('T')[0],
+      status: "pending",
+      badgeType: "badge-routine",
+      scoreImpact: 10
+    });
+
+    // 6. SCUML Registration
+    const dnfbps = ["Real Estate", "Professional Services", "General Trade"];
+    if (dnfbps.includes(comp.sector)) {
+      const scumlDue = new Date(incDateObj.getTime() + 30 * 24 * 60 * 60 * 1000);
+      timelines.push({
+        id: "scuml_reg",
+        name: "SCUML AML Compliance Registration",
+        description: "Special anti-money laundering registration for Designated Non-Financial Businesses (DNFBPs).",
+        dueDate: scumlDue.toISOString().split('T')[0],
+        status: hasScuml ? "compliant" : (CURRENT_DATE > scumlDue ? "overdue" : "pending"),
+        badgeType: hasScuml ? "badge-compliant" : "badge-urgent",
+        scoreImpact: 15
+      });
+    }
+
+    // 7. NIPC Registration
+    if (foreign === "yes") {
+      const nipcDue = new Date(incDateObj.getTime() + 14 * 24 * 60 * 60 * 1000);
+      timelines.push({
+        id: "nipc_reg",
+        name: "NIPC Foreign Investment Registration",
+        description: "Mandatory registry of foreign investments and capital imports with the NIPC.",
+        dueDate: nipcDue.toISOString().split('T')[0],
+        status: CURRENT_DATE > nipcDue ? "overdue" : "pending",
+        badgeType: CURRENT_DATE > nipcDue ? "badge-urgent" : "badge-upcoming",
+        scoreImpact: 10
+      });
+    }
+
+    // 8. NDPA Data Protection Audit
+    let ndpaDueDate = new Date(CURRENT_DATE.getFullYear(), 2, 15);
+    if (CURRENT_DATE > ndpaDueDate) {
+      ndpaDueDate = new Date(CURRENT_DATE.getFullYear() + 1, 2, 15);
+    }
+    timelines.push({
+      id: "ndpa_audit",
+      name: "NDPC Annual Data Audit Report",
+      description: "Mandatory filing of privacy policies and compliance audits to the Data Protection Commission.",
+      dueDate: ndpaDueDate.toISOString().split('T')[0],
+      status: "pending",
+      badgeType: "badge-routine",
+      scoreImpact: 10
+    });
+
+    return timelines;
+  }
+
   async function updateDashboardData() {
     const comp = companies.find(c => c.id === currentCompanyId);
     if (!comp) return;
 
     try {
-      // Fetch score and timelines from Express backend
-      const res = await fetch(`/api/companies/${currentCompanyId}/timelines`);
-      const data = await res.json();
+      let timelines = [];
+      let score = 100;
+      let pendingCount = 0;
 
-      statScore.textContent = `${data.score}%`;
-      statPending.textContent = data.pendingCount;
+      try {
+        // Fetch score and timelines from Express backend
+        const res = await fetch(`/api/companies/${currentCompanyId}/timelines`);
+        if (!res.ok) throw new Error("API returned status " + res.status);
+        const data = await res.json();
+        if (!data || typeof data.score === 'undefined') throw new Error("Invalid structure");
+        
+        score = data.score;
+        pendingCount = data.pendingCount;
+        timelines = data.timelines;
+      } catch (err) {
+        console.warn("Backend timelines fetch failed, using local engine fallback:", err.message);
+        timelines = calculateLocalTimelines(comp, CURRENT_DATE);
+        
+        timelines.forEach(t => {
+          if (t.status === "overdue") {
+            score -= t.scoreImpact;
+            pendingCount++;
+          } else if (t.status === "pending") {
+            pendingCount++;
+          }
+        });
+        const dnfbps = ["Real Estate", "Professional Services", "General Trade"];
+        if (dnfbps.includes(comp.sector) && !comp.hasScuml) {
+          score -= 15;
+          pendingCount++;
+        }
+        score = Math.max(score, 10);
+      }
 
-      const futureTimelines = data.timelines
+      statScore.textContent = `${score}%`;
+      statPending.textContent = pendingCount;
+
+      const futureTimelines = timelines
         .filter(t => t.status !== "overdue" && t.status !== "compliant")
         .sort((a, b) => new Date(a.dueDate) - new Date(b.dueDate));
       
@@ -279,7 +465,6 @@ document.addEventListener("DOMContentLoaded", () => {
       }
 
       // Set Global status sidebar indicator
-      const score = data.score;
       if (score >= 90) {
         globalStatusDot.className = "status-dot";
         globalStatusText.textContent = "Compliant";
@@ -297,7 +482,7 @@ document.addEventListener("DOMContentLoaded", () => {
       }
 
       // Render timeline lists
-      renderTimelineItems(data.timelines);
+      renderTimelineItems(timelines);
 
       // Fetch and render regulatory updates from API
       await fetchRegulatoryUpdates();
@@ -344,7 +529,9 @@ document.addEventListener("DOMContentLoaded", () => {
   async function fetchRegulatoryUpdates() {
     try {
       const res = await fetch("/api/compliance/updates");
+      if (!res.ok) throw new Error("API status " + res.status);
       const updates = await res.json();
+      if (!Array.isArray(updates)) throw new Error("Updates is not an array");
 
       const updatesContainer = document.querySelector("#view-dashboard .dashboard-grid > div:last-child");
       if (updatesContainer) {
@@ -372,7 +559,7 @@ document.addEventListener("DOMContentLoaded", () => {
         });
       }
     } catch (e) {
-      console.error("Failed to fetch updates:", e);
+      console.warn("Failed to fetch updates, keeping static placeholders:", e);
     }
   }
 
@@ -380,7 +567,9 @@ document.addEventListener("DOMContentLoaded", () => {
   async function fetchIncomeRows() {
     try {
       const res = await fetch(`/api/companies/${currentCompanyId}/income`);
+      if (!res.ok) throw new Error("API status " + res.status);
       const rows = await res.json();
+      if (!Array.isArray(rows)) throw new Error("Income rows is not an array");
       
       incomeTableBody.innerHTML = "";
       
