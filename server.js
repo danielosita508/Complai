@@ -21,11 +21,72 @@ const pool = new Pool({
   ssl: { rejectUnauthorized: false } // Required for Supabase ssl connectivity
 });
 
+// Database connectivity state
+let dbConnected = false;
+
+// Local In-Memory Fallback Arrays (Dry-Run Mode)
+let memCompanies = [
+  {
+    id: 'comp-1',
+    name: 'Apex Tech Ventures Ltd',
+    type: 'LTD',
+    sector: 'Tech Startup',
+    inc_date: '2025-02-15',
+    share_capital: 1000000,
+    employees: 12,
+    foreign_participation: 'no',
+    is_startup_labelled: 1,
+    has_scuml: 0
+  },
+  {
+    id: 'comp-2',
+    name: 'Zenith Real Estate & Build Co',
+    type: 'LTD',
+    sector: 'Real Estate',
+    inc_date: '2024-08-01',
+    share_capital: 5000000,
+    employees: 6,
+    foreign_participation: 'yes',
+    is_startup_labelled: 0,
+    has_scuml: 0
+  }
+];
+
+let memIncomeRows = [];
+let memRegulatoryUpdates = [
+  {
+    id: 1,
+    title: 'FIRS - WHT Amendment Regulations 2025',
+    source: 'FIRS',
+    content: 'New exemptions introduced for small businesses and lowered rates on specific local service contracts. Tax calculator updated.',
+    published_date: '2026-06-15'
+  },
+  {
+    id: 2,
+    title: 'NDPC Data Protection Enforcement',
+    source: 'NDPC',
+    content: 'Registration portal is now fully active. Audits for all labelled startups must compile data maps by early 2027.',
+    published_date: '2026-07-02'
+  },
+  {
+    id: 3,
+    title: 'CBN Foreign Exchange Policy 2026',
+    source: 'CBN',
+    content: 'Startups with eCCIs can now utilize single-window access for capital and dividend repatriation.',
+    published_date: '2026-07-10'
+  }
+];
+
+let memCompanyFilings = [];
+let memNotifications = [];
+let memTaxHistory = [];
+
 // Test Connection and Initialize Tables
 try {
   pool.connect((err, client, release) => {
     if (err) {
       console.error("Database connection failed (callback):", err.message);
+      console.log("Operating in dry-run/in-memory mode.");
     } else {
       console.log("Connected to Supabase PostgreSQL database successfully.");
       release();
@@ -34,7 +95,7 @@ try {
   });
 } catch (e) {
   console.error("Database connection setup failed (exception):", e.message);
-  console.log("Operating in dry-run mode due to invalid connection URL placeholder.");
+  console.log("Operating in dry-run/in-memory mode due to invalid connection URL placeholder.");
 }
 
 async function initDb() {
@@ -140,8 +201,13 @@ async function initDb() {
       `);
       console.log("Seeded initial regulatory updates.");
     }
+
+    dbConnected = true;
+    console.log("Database schema initialized. Live DB mode active.");
   } catch (err) {
     console.error("Database schema initialization failed:", err.message);
+    dbConnected = false;
+    console.log("Operating in dry-run/in-memory mode.");
   }
 }
 
@@ -273,6 +339,20 @@ function calculateTimelines(comp, CURRENT_DATE) {
 // 1. Get Companies List
 app.get("/api/companies", async (req, res) => {
   try {
+    if (!dbConnected) {
+      return res.json(memCompanies.map(r => ({
+        id: r.id,
+        name: r.name,
+        type: r.type,
+        sector: r.sector,
+        incDate: r.inc_date,
+        shareCapital: r.share_capital,
+        employees: r.employees,
+        foreign: r.foreign_participation,
+        isStartupLabelled: r.is_startup_labelled === 1,
+        hasScuml: r.has_scuml === 1
+      })));
+    }
     const result = await pool.query("SELECT * FROM companies");
     res.json(result.rows.map(r => ({
       id: r.id,
@@ -294,6 +374,24 @@ app.get("/api/companies", async (req, res) => {
 // 2. Get specific Company
 app.get("/api/companies/:id", async (req, res) => {
   try {
+    if (!dbConnected) {
+      const row = memCompanies.find(c => c.id === req.params.id);
+      if (!row) {
+        return res.status(404).json({ error: "Company not found" });
+      }
+      return res.json({
+        id: row.id,
+        name: row.name,
+        type: row.type,
+        sector: row.sector,
+        incDate: row.inc_date,
+        shareCapital: row.share_capital,
+        employees: row.employees,
+        foreign: row.foreign_participation,
+        isStartupLabelled: row.is_startup_labelled === 1,
+        hasScuml: row.has_scuml === 1
+      });
+    }
     const result = await pool.query("SELECT * FROM companies WHERE id = $1", [req.params.id]);
     const row = result.rows[0];
     if (!row) {
@@ -325,22 +423,43 @@ app.post("/api/companies", async (req, res) => {
     return res.status(400).json({ error: "Missing required fields" });
   }
 
-  const query = `
-    INSERT INTO companies (id, name, type, sector, inc_date, share_capital, employees, foreign_participation, is_startup_labelled, has_scuml)
-    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-    ON CONFLICT(id) DO UPDATE SET
-      name=EXCLUDED.name,
-      type=EXCLUDED.type,
-      sector=EXCLUDED.sector,
-      inc_date=EXCLUDED.inc_date,
-      share_capital=EXCLUDED.share_capital,
-      employees=EXCLUDED.employees,
-      foreign_participation=EXCLUDED.foreign_participation,
-      is_startup_labelled=EXCLUDED.is_startup_labelled,
-      has_scuml=EXCLUDED.has_scuml
-  `;
-
   try {
+    if (!dbConnected) {
+      const idx = memCompanies.findIndex(c => c.id === id);
+      const newCompany = {
+        id,
+        name,
+        type,
+        sector,
+        inc_date: incDate,
+        share_capital: parseInt(shareCapital) || 1000000,
+        employees: parseInt(employees) || 0,
+        foreign_participation: foreign || "no",
+        is_startup_labelled: isStartupLabelled ? 1 : 0,
+        has_scuml: hasScuml ? 1 : 0
+      };
+      if (idx >= 0) {
+        memCompanies[idx] = newCompany;
+      } else {
+        memCompanies.push(newCompany);
+      }
+      return res.json({ success: true, companyId: id });
+    }
+
+    const query = `
+      INSERT INTO companies (id, name, type, sector, inc_date, share_capital, employees, foreign_participation, is_startup_labelled, has_scuml)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+      ON CONFLICT(id) DO UPDATE SET
+        name=EXCLUDED.name,
+        type=EXCLUDED.type,
+        sector=EXCLUDED.sector,
+        inc_date=EXCLUDED.inc_date,
+        share_capital=EXCLUDED.share_capital,
+        employees=EXCLUDED.employees,
+        foreign_participation=EXCLUDED.foreign_participation,
+        is_startup_labelled=EXCLUDED.is_startup_labelled,
+        has_scuml=EXCLUDED.has_scuml
+    `;
     await pool.query(query, [
       id, name, type, sector, incDate, 
       shareCapital || 1000000, 
@@ -359,32 +478,54 @@ app.post("/api/companies", async (req, res) => {
 app.get("/api/companies/:id/timelines", async (req, res) => {
   const compId = req.params.id;
   try {
-    const result = await pool.query("SELECT * FROM companies WHERE id = $1", [compId]);
-    const row = result.rows[0];
-    if (!row) {
-      return res.status(404).json({ error: "Company not found" });
-    }
+    let company;
+    let filingsMap = {};
 
-    const company = {
-      id: row.id,
-      name: row.name,
-      type: row.type,
-      sector: row.sector,
-      incDate: row.inc_date,
-      shareCapital: row.share_capital,
-      employees: row.employees,
-      foreign_participation: row.foreign_participation,
-      isStartupLabelled: row.is_startup_labelled === 1,
-      hasScuml: row.has_scuml === 1
-    };
+    if (!dbConnected) {
+      const row = memCompanies.find(c => c.id === compId);
+      if (!row) {
+        return res.status(404).json({ error: "Company not found" });
+      }
+      company = {
+        id: row.id,
+        name: row.name,
+        type: row.type,
+        sector: row.sector,
+        incDate: row.inc_date,
+        shareCapital: row.share_capital,
+        employees: row.employees,
+        foreign_participation: row.foreign_participation,
+        isStartupLabelled: row.is_startup_labelled === 1,
+        hasScuml: row.has_scuml === 1
+      };
+
+      const companyFilings = memCompanyFilings.filter(f => f.company_id === compId);
+      companyFilings.forEach(f => { filingsMap[f.timeline_id] = f; });
+    } else {
+      const result = await pool.query("SELECT * FROM companies WHERE id = $1", [compId]);
+      const row = result.rows[0];
+      if (!row) {
+        return res.status(404).json({ error: "Company not found" });
+      }
+      company = {
+        id: row.id,
+        name: row.name,
+        type: row.type,
+        sector: row.sector,
+        incDate: row.inc_date,
+        shareCapital: row.share_capital,
+        employees: row.employees,
+        foreign_participation: row.foreign_participation,
+        isStartupLabelled: row.is_startup_labelled === 1,
+        hasScuml: row.has_scuml === 1
+      };
+
+      const filingsResult = await pool.query("SELECT * FROM company_filings WHERE company_id = $1", [compId]);
+      filingsResult.rows.forEach(f => { filingsMap[f.timeline_id] = f; });
+    }
 
     const CURRENT_DATE = new Date();
     const timelines = calculateTimelines(company, CURRENT_DATE);
-
-    // Merge filing overrides from company_filings table
-    const filingsResult = await pool.query("SELECT * FROM company_filings WHERE company_id = $1", [compId]);
-    const filingsMap = {};
-    filingsResult.rows.forEach(f => { filingsMap[f.timeline_id] = f; });
 
     timelines.forEach(t => {
       if (filingsMap[t.id]) {
@@ -428,6 +569,11 @@ app.get("/api/companies/:id/timelines", async (req, res) => {
 // 5. Get Company Active Income Rows
 app.get("/api/companies/:id/income", async (req, res) => {
   try {
+    if (!dbConnected) {
+      const rows = memIncomeRows.filter(r => r.company_id === req.params.id)
+        .sort((a, b) => new Date(b.date) - new Date(a.date));
+      return res.json(rows);
+    }
     const result = await pool.query("SELECT * FROM income_rows WHERE company_id = $1 ORDER BY date DESC", [req.params.id]);
     res.json(result.rows);
   } catch (err) {
@@ -445,6 +591,18 @@ app.post("/api/companies/:id/income", async (req, res) => {
   }
 
   try {
+    if (!dbConnected) {
+      const newIncome = {
+        id: memIncomeRows.length + 1,
+        company_id,
+        amount: parseFloat(amount),
+        description: description || "",
+        date
+      };
+      memIncomeRows.push(newIncome);
+      return res.json({ id: newIncome.id, success: true });
+    }
+
     const result = await pool.query(
       "INSERT INTO income_rows (company_id, amount, description, date) VALUES ($1, $2, $3, $4) RETURNING id",
       [company_id, amount, description || "", date]
@@ -522,6 +680,9 @@ Provide professional, structured compliance milestones, due dates, penalty risks
 // 8. Regulatory Updates Feed
 app.get("/api/compliance/updates", async (req, res) => {
   try {
+    if (!dbConnected) {
+      return res.json(memRegulatoryUpdates);
+    }
     const result = await pool.query("SELECT * FROM regulatory_updates ORDER BY published_date DESC");
     res.json(result.rows);
   } catch (err) {
@@ -583,6 +744,9 @@ app.post("/api/compliance/register", (req, res) => {
 // 10. Get Company Filing Overrides
 app.get("/api/companies/:id/filings", async (req, res) => {
   try {
+    if (!dbConnected) {
+      return res.json(memCompanyFilings.filter(f => f.company_id === req.params.id));
+    }
     const result = await pool.query("SELECT * FROM company_filings WHERE company_id = $1", [req.params.id]);
     res.json(result.rows);
   } catch (err) {
@@ -601,6 +765,23 @@ app.post("/api/companies/:id/filings", async (req, res) => {
   }
 
   try {
+    if (!dbConnected) {
+      const idx = memCompanyFilings.findIndex(f => f.company_id === company_id && f.timeline_id === timelineId);
+      const newFiling = {
+        id: memCompanyFilings.length + 1,
+        company_id,
+        timeline_id: timelineId,
+        status: status || 'filed',
+        filed_date
+      };
+      if (idx >= 0) {
+        memCompanyFilings[idx] = newFiling;
+      } else {
+        memCompanyFilings.push(newFiling);
+      }
+      return res.json({ success: true, timelineId, status: status || 'filed' });
+    }
+
     await pool.query(
       `INSERT INTO company_filings (company_id, timeline_id, status, filed_date)
        VALUES ($1, $2, $3, $4)
@@ -616,6 +797,10 @@ app.post("/api/companies/:id/filings", async (req, res) => {
 // 12. Delete a Filing Override (undo)
 app.delete("/api/companies/:id/filings/:timelineId", async (req, res) => {
   try {
+    if (!dbConnected) {
+      memCompanyFilings = memCompanyFilings.filter(f => !(f.company_id === req.params.id && f.timeline_id === req.params.timelineId));
+      return res.json({ success: true });
+    }
     await pool.query("DELETE FROM company_filings WHERE company_id = $1 AND timeline_id = $2", [req.params.id, req.params.timelineId]);
     res.json({ success: true });
   } catch (err) {
@@ -626,6 +811,12 @@ app.delete("/api/companies/:id/filings/:timelineId", async (req, res) => {
 // 13. Get Company Notifications
 app.get("/api/companies/:id/notifications", async (req, res) => {
   try {
+    if (!dbConnected) {
+      const rows = memNotifications.filter(n => n.company_id === req.params.id)
+        .sort((a, b) => new Date(b.created_at) - new Date(a.created_at))
+        .slice(0, 50);
+      return res.json(rows);
+    }
     const result = await pool.query("SELECT * FROM notifications WHERE company_id = $1 ORDER BY created_at DESC LIMIT 50", [req.params.id]);
     res.json(result.rows);
   } catch (err) {
@@ -636,6 +827,12 @@ app.get("/api/companies/:id/notifications", async (req, res) => {
 // 14. Mark All Notifications as Read
 app.post("/api/companies/:id/notifications/read", async (req, res) => {
   try {
+    if (!dbConnected) {
+      memNotifications.forEach(n => {
+        if (n.company_id === req.params.id) n.is_read = 1;
+      });
+      return res.json({ success: true });
+    }
     await pool.query("UPDATE notifications SET is_read = 1 WHERE company_id = $1 AND is_read = 0", [req.params.id]);
     res.json({ success: true });
   } catch (err) {
@@ -646,6 +843,23 @@ app.post("/api/companies/:id/notifications/read", async (req, res) => {
 // 15. DB Diagnostics Endpoint
 app.get("/api/diagnostics/db", async (req, res) => {
   try {
+    if (!dbConnected) {
+      return res.json({
+        status: "disconnected",
+        database: "N/A",
+        error: "Operating in local dry-run / in-memory mode",
+        tables: {
+          companies: memCompanies.length,
+          income_rows: memIncomeRows.length,
+          company_filings: memCompanyFilings.length,
+          notifications: memNotifications.length,
+          tax_history: memTaxHistory.length,
+          regulatory_updates: memRegulatoryUpdates.length
+        },
+        serverTime: new Date().toISOString()
+      });
+    }
+
     const companiesCount = await pool.query("SELECT COUNT(*) as count FROM companies");
     const incomeCount = await pool.query("SELECT COUNT(*) as count FROM income_rows");
     const filingsCount = await pool.query("SELECT COUNT(*) as count FROM company_filings");
@@ -680,6 +894,12 @@ app.get("/api/diagnostics/db", async (req, res) => {
 // 16. Get Tax Calculation History
 app.get("/api/companies/:id/tax-history", async (req, res) => {
   try {
+    if (!dbConnected) {
+      const rows = memTaxHistory.filter(h => h.company_id === req.params.id)
+        .sort((a, b) => new Date(b.calculated_at) - new Date(a.calculated_at))
+        .slice(0, 20);
+      return res.json(rows);
+    }
     const result = await pool.query("SELECT * FROM tax_history WHERE company_id = $1 ORDER BY calculated_at DESC LIMIT 20", [req.params.id]);
     res.json(result.rows);
   } catch (err) {
@@ -694,6 +914,26 @@ app.post("/api/companies/:id/tax-history", async (req, res) => {
   const calculated_at = new Date().toISOString();
 
   try {
+    if (!dbConnected) {
+      const newTax = {
+        id: memTaxHistory.length + 1,
+        company_id,
+        revenue: parseFloat(revenue) || 0,
+        profit: parseFloat(profit) || 0,
+        payroll: parseFloat(payroll) || 0,
+        employees: parseInt(employees) || 0,
+        cit_estimate: parseFloat(cit_estimate) || 0,
+        vat_estimate: parseFloat(vat_estimate) || 0,
+        pension_estimate: parseFloat(pension_estimate) || 0,
+        nsitf_estimate: parseFloat(nsitf_estimate) || 0,
+        itf_estimate: parseFloat(itf_estimate) || 0,
+        total_obligations: parseFloat(total_obligations) || 0,
+        calculated_at
+      };
+      memTaxHistory.push(newTax);
+      return res.json({ id: newTax.id, success: true });
+    }
+
     const result = await pool.query(
       `INSERT INTO tax_history (company_id, revenue, profit, payroll, employees, cit_estimate, vat_estimate, pension_estimate, nsitf_estimate, itf_estimate, total_obligations, calculated_at)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) RETURNING id`,
@@ -755,8 +995,8 @@ Let me know if you would like me to draft a contract or compile step-by-step che
 cron.schedule("0 * * * *", async () => {
   console.log("[BACKGROUND WORKER] Scanning corporate database for filing deadlines...");
   try {
-    const result = await pool.query("SELECT * FROM companies");
-    for (const r of result.rows) {
+    const companiesList = dbConnected ? (await pool.query("SELECT * FROM companies")).rows : memCompanies;
+    for (const r of companiesList) {
       const company = {
         id: r.id,
         name: r.name,
@@ -774,24 +1014,46 @@ cron.schedule("0 * * * *", async () => {
       const timelines = calculateTimelines(company, CURRENT_DATE);
 
       // Get existing filings to skip compliant items
-      const filingsResult = await pool.query("SELECT timeline_id FROM company_filings WHERE company_id = $1", [company.id]);
-      const filedIds = new Set(filingsResult.rows.map(f => f.timeline_id));
+      let filedIds;
+      if (dbConnected) {
+        const filingsResult = await pool.query("SELECT timeline_id FROM company_filings WHERE company_id = $1", [company.id]);
+        filedIds = new Set(filingsResult.rows.map(f => f.timeline_id));
+      } else {
+        const companyFilings = memCompanyFilings.filter(f => f.company_id === company.id);
+        filedIds = new Set(companyFilings.map(f => f.timeline_id));
+      }
 
       let score = 100;
       for (const t of timelines) {
         if (filedIds.has(t.id)) continue;
         if (t.status === "overdue") {
           score -= t.scoreImpact;
-          // Check for duplicate notification before inserting
-          const existing = await pool.query(
-            "SELECT id FROM notifications WHERE company_id = $1 AND message LIKE $2 AND created_at > $3",
-            [company.id, `%${t.id}%`, CURRENT_DATE.toISOString().split('T')[0]]
-          );
-          if (existing.rows.length === 0) {
-            await pool.query(
-              "INSERT INTO notifications (company_id, type, message, created_at) VALUES ($1, $2, $3, $4)",
-              [company.id, "warning", `OVERDUE: ${t.name} was due on ${t.dueDate}. Penalty risk: ${t.scoreImpact}% score impact. [${t.id}]`, CURRENT_DATE.toISOString()]
+          
+          if (dbConnected) {
+            // Check for duplicate notification before inserting
+            const existing = await pool.query(
+              "SELECT id FROM notifications WHERE company_id = $1 AND message LIKE $2 AND created_at > $3",
+              [company.id, `%${t.id}%`, CURRENT_DATE.toISOString().split('T')[0]]
             );
+            if (existing.rows.length === 0) {
+              await pool.query(
+                "INSERT INTO notifications (company_id, type, message, created_at) VALUES ($1, $2, $3, $4)",
+                [company.id, "warning", `OVERDUE: ${t.name} was due on ${t.dueDate}. Penalty risk: ${t.scoreImpact}% score impact. [${t.id}]`, CURRENT_DATE.toISOString()]
+              );
+            }
+          } else {
+            const todayStr = CURRENT_DATE.toISOString().split('T')[0];
+            const existing = memNotifications.find(n => n.company_id === company.id && n.message.includes(t.id) && n.created_at.split('T')[0] === todayStr);
+            if (!existing) {
+              memNotifications.push({
+                id: memNotifications.length + 1,
+                company_id: company.id,
+                type: "warning",
+                message: `OVERDUE: ${t.name} was due on ${t.dueDate}. Penalty risk: ${t.scoreImpact}% score impact. [${t.id}]`,
+                created_at: CURRENT_DATE.toISOString(),
+                is_read: 0
+              });
+            }
           }
         }
       }
