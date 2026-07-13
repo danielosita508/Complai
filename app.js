@@ -13,8 +13,8 @@ document.addEventListener("DOMContentLoaded", () => {
   // Contracts state
   let activeContractTemplate = "employment";
 
-  // Current local time from metadata
-  const CURRENT_DATE = new Date("2026-07-11T16:28:24+01:00");
+  // Current local time - live
+  const CURRENT_DATE = new Date();
 
   // --- SELECTORS ---
   const companySelector = document.getElementById("company-selector");
@@ -86,6 +86,20 @@ document.addEventListener("DOMContentLoaded", () => {
   const addIncomeForm = document.getElementById("add-income-form");
   const incomeTableBody = document.getElementById("income-table-body");
 
+  // Notification elements
+  const btnNotifications = document.getElementById("btn-notifications");
+  const notifBadge = document.getElementById("notif-badge");
+  const notificationPanel = document.getElementById("notification-panel");
+  const notificationList = document.getElementById("notification-list");
+  const btnMarkAllRead = document.getElementById("btn-mark-all-read");
+
+  // DB Status elements
+  const dbStatusDot = document.getElementById("db-status-dot");
+  const dbStatusText = document.getElementById("db-status-text");
+
+  // Tax History
+  const taxHistoryContainer = document.getElementById("tax-history-container");
+
   // Chatbot
   const chatMsgPanel = document.getElementById("chat-msg-panel");
   const chatInput = document.getElementById("chat-input");
@@ -101,6 +115,8 @@ document.addEventListener("DOMContentLoaded", () => {
     initWizards();
     initContracts();
     setupEventListeners();
+    checkDbStatus();
+    fetchNotifications();
   }
 
   // --- NAVIGATION VIEW ROUTING ---
@@ -142,6 +158,7 @@ document.addEventListener("DOMContentLoaded", () => {
       updateDashboardData();
     } else if (viewName === "calculator") {
       fetchIncomeRows();
+      fetchTaxHistory();
     }
   }
 
@@ -508,8 +525,16 @@ document.addEventListener("DOMContentLoaded", () => {
       const formattedDate = new Date(item.dueDate).toLocaleDateString('en-NG', { year: 'numeric', month: 'long', day: 'numeric' });
       
       let statusBadgeLabel = item.status.toUpperCase();
-      if (item.status === "compliant") statusBadgeLabel = "Compliant";
+      if (item.status === "compliant") statusBadgeLabel = "✓ Filed";
       
+      // Build action button based on status
+      let actionBtnHtml = "";
+      if (item.status === "compliant") {
+        actionBtnHtml = `<button class="filing-action-btn undo" data-timeline-id="${item.id}" title="Undo filing" style="background:rgba(255,71,87,0.15); border:1px solid rgba(255,71,87,0.3); color:var(--color-danger); border-radius:8px; padding:0.35rem 0.75rem; font-size:0.75rem; cursor:pointer; font-weight:600; transition: all 0.3s ease;">Undo</button>`;
+      } else {
+        actionBtnHtml = `<button class="filing-action-btn mark" data-timeline-id="${item.id}" title="Mark as filed" style="background:rgba(0,245,160,0.1); border:1px solid rgba(0,245,160,0.3); color:var(--color-primary); border-radius:8px; padding:0.35rem 0.75rem; font-size:0.75rem; cursor:pointer; font-weight:600; transition: all 0.3s ease;">Mark Filed</button>`;
+      }
+
       el.innerHTML = `
         <div class="timeline-info">
           <span class="timeline-title">${item.name}</span>
@@ -519,11 +544,57 @@ document.addEventListener("DOMContentLoaded", () => {
             <span>Penalty risk: <strong>${item.scoreImpact}% Score</strong></span>
           </div>
         </div>
-        <span class="timeline-badge ${item.badgeType}">${statusBadgeLabel}</span>
+        <div style="display:flex; align-items:center; gap:0.75rem; flex-shrink:0;">
+          ${actionBtnHtml}
+          <span class="timeline-badge ${item.badgeType}">${statusBadgeLabel}</span>
+        </div>
       `;
       
       timelineListContainer.appendChild(el);
     });
+
+    // Attach filing action event listeners
+    document.querySelectorAll(".filing-action-btn.mark").forEach(btn => {
+      btn.addEventListener("click", async (e) => {
+        const timelineId = e.currentTarget.getAttribute("data-timeline-id");
+        await markFiling(timelineId);
+      });
+    });
+    document.querySelectorAll(".filing-action-btn.undo").forEach(btn => {
+      btn.addEventListener("click", async (e) => {
+        const timelineId = e.currentTarget.getAttribute("data-timeline-id");
+        await undoFiling(timelineId);
+      });
+    });
+  }
+
+  // --- FILING STATUS ACTIONS ---
+  async function markFiling(timelineId) {
+    try {
+      const res = await fetch(`/api/companies/${currentCompanyId}/filings`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ timelineId, status: "filed" })
+      });
+      if (res.ok) {
+        await updateDashboardData();
+      }
+    } catch (e) {
+      console.error("Failed to mark filing:", e);
+    }
+  }
+
+  async function undoFiling(timelineId) {
+    try {
+      const res = await fetch(`/api/companies/${currentCompanyId}/filings/${timelineId}`, {
+        method: "DELETE"
+      });
+      if (res.ok) {
+        await updateDashboardData();
+      }
+    } catch (e) {
+      console.error("Failed to undo filing:", e);
+    }
   }
 
   async function fetchRegulatoryUpdates() {
@@ -1003,10 +1074,51 @@ document.addEventListener("DOMContentLoaded", () => {
         <strong style="color: var(--color-primary)">₦${totalObligations.toLocaleString('en-NG', { maximumFractionDigits: 2 })}</strong>
       </div>
       
+      <div style="display:flex; justify-content:center; margin-top:1rem;">
+        <button type="button" id="btn-save-tax-calc" style="background: linear-gradient(135deg, var(--color-accent), var(--color-secondary)); color:#fff; border:none; border-radius:10px; padding:0.6rem 1.5rem; font-size:0.85rem; font-weight:600; cursor:pointer; transition: all 0.3s ease;">Save Calculation to History</button>
+      </div>
+      
       <div style="font-size: 0.8rem; color: var(--text-muted); margin-top: 1rem; border-top: 1px solid rgba(255,255,255,0.05); padding-top: 0.5rem; text-align: center;">
         Note: These estimates are statutory projections based on current tax law structures and are not final tax filings.
       </div>
     `;
+
+    // Attach save handler
+    const saveTaxBtn = document.getElementById("btn-save-tax-calc");
+    if (saveTaxBtn) {
+      saveTaxBtn.addEventListener("click", async () => {
+        saveTaxBtn.textContent = "Saving...";
+        saveTaxBtn.disabled = true;
+        try {
+          const res = await fetch(`/api/companies/${currentCompanyId}/tax-history`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              revenue: rev,
+              profit,
+              payroll: monthlyPayroll,
+              employees: employeesCount,
+              cit_estimate: calculatedCIT,
+              vat_estimate: calculatedVAT,
+              pension_estimate: calculatedPension,
+              nsitf_estimate: calculatedNSITF,
+              itf_estimate: calculatedITF,
+              total_obligations: totalObligations
+            })
+          });
+          if (res.ok) {
+            saveTaxBtn.textContent = "✓ Saved!";
+            saveTaxBtn.style.background = "var(--color-primary)";
+            await fetchTaxHistory();
+          } else {
+            saveTaxBtn.textContent = "Save Failed";
+          }
+        } catch (e) {
+          console.error("Failed to save tax calc:", e);
+          saveTaxBtn.textContent = "Save Failed";
+        }
+      });
+    }
   }
 
   // --- AI LAW ADVISOR CHATBOT ---
@@ -1059,6 +1171,146 @@ document.addEventListener("DOMContentLoaded", () => {
     chatMsgPanel.scrollTop = chatMsgPanel.scrollHeight;
   }
 
+  // --- NOTIFICATIONS ENGINE ---
+  async function fetchNotifications() {
+    try {
+      const res = await fetch(`/api/companies/${currentCompanyId}/notifications`);
+      if (!res.ok) throw new Error("API status " + res.status);
+      const notifications = await res.json();
+      if (!Array.isArray(notifications)) throw new Error("Not an array");
+
+      const unreadCount = notifications.filter(n => n.is_read === 0).length;
+
+      if (notifBadge) {
+        if (unreadCount > 0) {
+          notifBadge.style.display = "flex";
+          notifBadge.textContent = unreadCount > 9 ? "9+" : unreadCount;
+        } else {
+          notifBadge.style.display = "none";
+        }
+      }
+
+      if (notificationList) {
+        if (notifications.length === 0) {
+          notificationList.innerHTML = `<div style="padding:2rem; text-align:center; color:var(--text-muted); font-size:0.85rem;">No notifications yet. Overdue filings will appear here.</div>`;
+        } else {
+          notificationList.innerHTML = "";
+          notifications.forEach(n => {
+            const div = document.createElement("div");
+            div.style.cssText = `padding: 0.75rem 1rem; border-bottom: 1px solid var(--border-glass); font-size: 0.85rem; opacity: ${n.is_read ? '0.5' : '1'}; transition: opacity 0.3s;`;
+            
+            const typeColor = n.type === "warning" ? "var(--color-warning)" : "var(--color-danger)";
+            const timeAgo = getTimeAgo(n.created_at);
+            
+            div.innerHTML = `
+              <div style="display:flex; align-items:center; gap:0.5rem; margin-bottom:0.25rem;">
+                <div style="width:6px; height:6px; border-radius:50%; background:${typeColor}; flex-shrink:0;"></div>
+                <span style="font-weight:600; color:${typeColor}; text-transform:uppercase; font-size:0.7rem;">${n.type}</span>
+                <span style="margin-left:auto; font-size:0.7rem; color:var(--text-muted);">${timeAgo}</span>
+              </div>
+              <p style="margin:0; color:#ccc; line-height:1.4;">${n.message.replace(/\[.*?\]/, '')}</p>
+            `;
+            notificationList.appendChild(div);
+          });
+        }
+      }
+    } catch (e) {
+      console.warn("Notifications fetch failed:", e.message);
+    }
+  }
+
+  function getTimeAgo(dateStr) {
+    const diff = Date.now() - new Date(dateStr).getTime();
+    const mins = Math.floor(diff / 60000);
+    if (mins < 60) return `${mins}m ago`;
+    const hrs = Math.floor(mins / 60);
+    if (hrs < 24) return `${hrs}h ago`;
+    const days = Math.floor(hrs / 24);
+    return `${days}d ago`;
+  }
+
+  async function markAllNotificationsRead() {
+    try {
+      await fetch(`/api/companies/${currentCompanyId}/notifications/read`, { method: "POST" });
+      await fetchNotifications();
+    } catch (e) {
+      console.error("Failed to mark notifications as read:", e);
+    }
+  }
+
+  // --- DB DIAGNOSTICS ---
+  async function checkDbStatus() {
+    try {
+      const res = await fetch("/api/diagnostics/db");
+      const data = await res.json();
+
+      if (data.status === "connected" && dbStatusDot && dbStatusText) {
+        dbStatusDot.style.background = "var(--color-primary)";
+        dbStatusDot.style.boxShadow = "0 0 8px var(--color-primary)";
+        const totalRecords = Object.values(data.tables).reduce((sum, v) => sum + v, 0);
+        dbStatusText.textContent = `Cloud DB Active • ${totalRecords} records`;
+        dbStatusText.style.color = "var(--color-primary)";
+      } else {
+        if (dbStatusDot) {
+          dbStatusDot.style.background = "var(--color-danger)";
+          dbStatusDot.style.boxShadow = "0 0 8px var(--color-danger)";
+        }
+        if (dbStatusText) {
+          dbStatusText.textContent = "DB Disconnected • Local Fallback";
+          dbStatusText.style.color = "var(--color-danger)";
+        }
+      }
+    } catch (e) {
+      if (dbStatusDot) {
+        dbStatusDot.style.background = "var(--color-warning)";
+      }
+      if (dbStatusText) {
+        dbStatusText.textContent = "Connection check failed";
+        dbStatusText.style.color = "var(--color-warning)";
+      }
+    }
+  }
+
+  // --- TAX HISTORY ---
+  async function fetchTaxHistory() {
+    if (!taxHistoryContainer) return;
+    try {
+      const res = await fetch(`/api/companies/${currentCompanyId}/tax-history`);
+      if (!res.ok) throw new Error("API status " + res.status);
+      const history = await res.json();
+      if (!Array.isArray(history)) throw new Error("Not an array");
+
+      if (history.length === 0) {
+        taxHistoryContainer.innerHTML = `<p style="color: var(--text-muted); font-size: 0.85rem;">No calculations saved yet. Run the estimator above to begin tracking.</p>`;
+        return;
+      }
+
+      taxHistoryContainer.innerHTML = "";
+      history.forEach((h, idx) => {
+        const date = new Date(h.calculated_at).toLocaleDateString('en-NG', { year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+        const div = document.createElement("div");
+        div.style.cssText = "background:rgba(255,255,255,0.02); border:1px solid var(--border-glass); border-radius:12px; padding:1rem; display:grid; grid-template-columns: 1fr 1fr 1fr; gap:0.5rem; font-size:0.8rem;";
+        div.innerHTML = `
+          <div>
+            <span style="color:var(--text-muted); display:block; font-size:0.7rem;">Revenue</span>
+            <strong style="color:var(--color-secondary);">₦${Number(h.revenue).toLocaleString('en-NG')}</strong>
+          </div>
+          <div>
+            <span style="color:var(--text-muted); display:block; font-size:0.7rem;">Total Obligations</span>
+            <strong style="color:var(--color-primary);">₦${Number(h.total_obligations).toLocaleString('en-NG')}</strong>
+          </div>
+          <div style="text-align:right;">
+            <span style="color:var(--text-muted); display:block; font-size:0.7rem;">Calculated</span>
+            <strong style="color:var(--text-muted);">${date}</strong>
+          </div>
+        `;
+        taxHistoryContainer.appendChild(div);
+      });
+    } catch (e) {
+      console.warn("Tax history fetch failed:", e.message);
+    }
+  }
+
   // --- EVENT LISTENERS ---
   function setupEventListeners() {
     navItems.forEach(item => {
@@ -1071,6 +1323,8 @@ document.addEventListener("DOMContentLoaded", () => {
     companySelector.addEventListener("change", (e) => {
       currentCompanyId = e.target.value;
       loadCompanyProfile(currentCompanyId);
+      fetchNotifications();
+      fetchTaxHistory();
     });
 
     btnOnboardNew.addEventListener("click", handleCreateNewCompany);
@@ -1110,6 +1364,29 @@ document.addEventListener("DOMContentLoaded", () => {
         chatInput.value = query;
         handleSendMessage();
       });
+    });
+
+    // Notification bell toggle
+    if (btnNotifications) {
+      btnNotifications.addEventListener("click", () => {
+        const isVisible = notificationPanel.style.display === "block";
+        notificationPanel.style.display = isVisible ? "none" : "block";
+        if (!isVisible) fetchNotifications();
+      });
+    }
+
+    // Mark all notifications read
+    if (btnMarkAllRead) {
+      btnMarkAllRead.addEventListener("click", markAllNotificationsRead);
+    }
+
+    // Close notification panel when clicking outside
+    document.addEventListener("click", (e) => {
+      if (notificationPanel && btnNotifications &&
+          !notificationPanel.contains(e.target) &&
+          !btnNotifications.contains(e.target)) {
+        notificationPanel.style.display = "none";
+      }
     });
   }
 

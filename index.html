@@ -91,6 +91,10 @@
           <select id="company-selector" class="company-select">
             <!-- Populated dynamically via JS -->
           </select>
+          <button class="btn-icon" id="btn-notifications" title="Notifications" style="position:relative; background: rgba(255,255,255,0.05); border: 1px solid var(--border-glass); border-radius: 12px; padding: 0.65rem; cursor: pointer; color: var(--text-muted); transition: all 0.3s ease;">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
+            <span id="notif-badge" style="display:none; position:absolute; top:-4px; right:-4px; background: var(--color-danger); color:#fff; font-size:0.65rem; font-weight:700; width:18px; height:18px; border-radius:50%; display:none; align-items:center; justify-content:center;">0</span>
+          </button>
           <button class="btn-primary" id="btn-onboard-new">
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
             New Company
@@ -393,6 +397,17 @@
               </table>
             </div>
           </div>
+
+          <!-- Tax Calculation History -->
+          <div style="margin-top: 2rem; border-top: 1px solid var(--border-glass); padding-top: 1.5rem;">
+            <h4 style="color: var(--color-accent); font-size: 1.15rem; margin-bottom: 1rem; display: flex; align-items: center; gap: 0.5rem;">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+              Tax Calculation History
+            </h4>
+            <div id="tax-history-container" style="display: flex; flex-direction: column; gap: 0.5rem;">
+              <p style="color: var(--text-muted); font-size: 0.85rem;">No calculations saved yet. Run the estimator above to begin tracking.</p>
+            </div>
+          </div>
         </div>
       </section>
 
@@ -441,6 +456,21 @@
           </div>
         </div>
       </section>
+
+      <!-- Notification Dropdown Panel -->
+      <div id="notification-panel" style="display:none; position:fixed; top:70px; right:30px; width:380px; max-height:450px; background: var(--bg-card); border: 1px solid var(--border-glass); border-radius: 16px; box-shadow: 0 20px 60px rgba(0,0,0,0.5); z-index:1000; overflow:hidden; backdrop-filter: blur(20px);">
+        <div style="padding: 1rem 1.25rem; border-bottom: 1px solid var(--border-glass); display:flex; justify-content:space-between; align-items:center;">
+          <h4 style="margin:0; font-size:1rem; color: var(--color-secondary);">Notifications</h4>
+          <button id="btn-mark-all-read" style="background:none; border:none; color: var(--color-accent); cursor:pointer; font-size:0.8rem; font-weight:600;">Mark all read</button>
+        </div>
+        <div id="notification-list" style="max-height:360px; overflow-y:auto; padding: 0.5rem;"></div>
+      </div>
+
+      <!-- DB Status Indicator -->
+      <div id="db-status-bar" style="position:fixed; bottom:20px; right:20px; background: rgba(10,12,25,0.9); border: 1px solid var(--border-glass); border-radius: 12px; padding: 0.5rem 1rem; font-size: 0.75rem; color: var(--text-muted); z-index:999; backdrop-filter: blur(10px); display:flex; align-items:center; gap:0.5rem;">
+        <div id="db-status-dot" style="width:8px; height:8px; border-radius:50%; background: var(--color-warning);"></div>
+        <span id="db-status-text">Checking connection...</span>
+      </div>
 
     </main>
   </div>

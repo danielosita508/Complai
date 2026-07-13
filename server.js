@@ -22,15 +22,20 @@ const pool = new Pool({
 });
 
 // Test Connection and Initialize Tables
-pool.connect((err, client, release) => {
-  if (err) {
-    console.error("Database connection failed:", err.stack);
-  } else {
-    console.log("Connected to Supabase PostgreSQL database successfully.");
-    release();
-    initDb();
-  }
-});
+try {
+  pool.connect((err, client, release) => {
+    if (err) {
+      console.error("Database connection failed (callback):", err.message);
+    } else {
+      console.log("Connected to Supabase PostgreSQL database successfully.");
+      release();
+      initDb();
+    }
+  });
+} catch (e) {
+  console.error("Database connection setup failed (exception):", e.message);
+  console.log("Operating in dry-run mode due to invalid connection URL placeholder.");
+}
 
 async function initDb() {
   try {
@@ -68,6 +73,46 @@ async function initDb() {
         source TEXT NOT NULL,
         content TEXT NOT NULL,
         published_date TEXT NOT NULL
+      )
+    `);
+
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS company_filings (
+        id SERIAL PRIMARY KEY,
+        company_id TEXT NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+        timeline_id TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'filed',
+        filed_date TEXT NOT NULL,
+        UNIQUE(company_id, timeline_id)
+      )
+    `);
+
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS notifications (
+        id SERIAL PRIMARY KEY,
+        company_id TEXT NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+        type TEXT NOT NULL DEFAULT 'warning',
+        message TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        is_read INTEGER DEFAULT 0
+      )
+    `);
+
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS tax_history (
+        id SERIAL PRIMARY KEY,
+        company_id TEXT NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+        revenue DOUBLE PRECISION NOT NULL,
+        profit DOUBLE PRECISION NOT NULL,
+        payroll DOUBLE PRECISION NOT NULL,
+        employees INTEGER NOT NULL,
+        cit_estimate DOUBLE PRECISION NOT NULL,
+        vat_estimate DOUBLE PRECISION NOT NULL,
+        pension_estimate DOUBLE PRECISION NOT NULL,
+        nsitf_estimate DOUBLE PRECISION NOT NULL,
+        itf_estimate DOUBLE PRECISION NOT NULL,
+        total_obligations DOUBLE PRECISION NOT NULL,
+        calculated_at TEXT NOT NULL
       )
     `);
 
@@ -310,7 +355,7 @@ app.post("/api/companies", async (req, res) => {
   }
 });
 
-// 4. Calculate Timelines & Score dynamically
+// 4. Calculate Timelines & Score dynamically (with filing overrides)
 app.get("/api/companies/:id/timelines", async (req, res) => {
   const compId = req.params.id;
   try {
@@ -333,8 +378,21 @@ app.get("/api/companies/:id/timelines", async (req, res) => {
       hasScuml: row.has_scuml === 1
     };
 
-    const CURRENT_DATE = new Date("2026-07-11T16:28:24+01:00");
+    const CURRENT_DATE = new Date();
     const timelines = calculateTimelines(company, CURRENT_DATE);
+
+    // Merge filing overrides from company_filings table
+    const filingsResult = await pool.query("SELECT * FROM company_filings WHERE company_id = $1", [compId]);
+    const filingsMap = {};
+    filingsResult.rows.forEach(f => { filingsMap[f.timeline_id] = f; });
+
+    timelines.forEach(t => {
+      if (filingsMap[t.id]) {
+        t.status = "compliant";
+        t.badgeType = "badge-compliant";
+        t.filedDate = filingsMap[t.id].filed_date;
+      }
+    });
 
     // Calculate score
     let score = 100;
@@ -522,6 +580,131 @@ app.post("/api/compliance/register", (req, res) => {
   });
 });
 
+// 10. Get Company Filing Overrides
+app.get("/api/companies/:id/filings", async (req, res) => {
+  try {
+    const result = await pool.query("SELECT * FROM company_filings WHERE company_id = $1", [req.params.id]);
+    res.json(result.rows);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// 11. Mark a Filing as Completed
+app.post("/api/companies/:id/filings", async (req, res) => {
+  const { timelineId, status } = req.body;
+  const company_id = req.params.id;
+  const filed_date = new Date().toISOString().split('T')[0];
+
+  if (!timelineId) {
+    return res.status(400).json({ error: "timelineId is required" });
+  }
+
+  try {
+    await pool.query(
+      `INSERT INTO company_filings (company_id, timeline_id, status, filed_date)
+       VALUES ($1, $2, $3, $4)
+       ON CONFLICT(company_id, timeline_id) DO UPDATE SET status = EXCLUDED.status, filed_date = EXCLUDED.filed_date`,
+      [company_id, timelineId, status || 'filed', filed_date]
+    );
+    res.json({ success: true, timelineId, status: status || 'filed' });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// 12. Delete a Filing Override (undo)
+app.delete("/api/companies/:id/filings/:timelineId", async (req, res) => {
+  try {
+    await pool.query("DELETE FROM company_filings WHERE company_id = $1 AND timeline_id = $2", [req.params.id, req.params.timelineId]);
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// 13. Get Company Notifications
+app.get("/api/companies/:id/notifications", async (req, res) => {
+  try {
+    const result = await pool.query("SELECT * FROM notifications WHERE company_id = $1 ORDER BY created_at DESC LIMIT 50", [req.params.id]);
+    res.json(result.rows);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// 14. Mark All Notifications as Read
+app.post("/api/companies/:id/notifications/read", async (req, res) => {
+  try {
+    await pool.query("UPDATE notifications SET is_read = 1 WHERE company_id = $1 AND is_read = 0", [req.params.id]);
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// 15. DB Diagnostics Endpoint
+app.get("/api/diagnostics/db", async (req, res) => {
+  try {
+    const companiesCount = await pool.query("SELECT COUNT(*) as count FROM companies");
+    const incomeCount = await pool.query("SELECT COUNT(*) as count FROM income_rows");
+    const filingsCount = await pool.query("SELECT COUNT(*) as count FROM company_filings");
+    const notifCount = await pool.query("SELECT COUNT(*) as count FROM notifications");
+    const taxCount = await pool.query("SELECT COUNT(*) as count FROM tax_history");
+    const updatesCount = await pool.query("SELECT COUNT(*) as count FROM regulatory_updates");
+
+    res.json({
+      status: "connected",
+      database: "Supabase PostgreSQL",
+      tables: {
+        companies: parseInt(companiesCount.rows[0].count),
+        income_rows: parseInt(incomeCount.rows[0].count),
+        company_filings: parseInt(filingsCount.rows[0].count),
+        notifications: parseInt(notifCount.rows[0].count),
+        tax_history: parseInt(taxCount.rows[0].count),
+        regulatory_updates: parseInt(updatesCount.rows[0].count)
+      },
+      serverTime: new Date().toISOString()
+    });
+  } catch (err) {
+    res.json({
+      status: "disconnected",
+      database: "N/A",
+      error: err.message,
+      tables: {},
+      serverTime: new Date().toISOString()
+    });
+  }
+});
+
+// 16. Get Tax Calculation History
+app.get("/api/companies/:id/tax-history", async (req, res) => {
+  try {
+    const result = await pool.query("SELECT * FROM tax_history WHERE company_id = $1 ORDER BY calculated_at DESC LIMIT 20", [req.params.id]);
+    res.json(result.rows);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// 17. Save Tax Calculation Snapshot
+app.post("/api/companies/:id/tax-history", async (req, res) => {
+  const { revenue, profit, payroll, employees, cit_estimate, vat_estimate, pension_estimate, nsitf_estimate, itf_estimate, total_obligations } = req.body;
+  const company_id = req.params.id;
+  const calculated_at = new Date().toISOString();
+
+  try {
+    const result = await pool.query(
+      `INSERT INTO tax_history (company_id, revenue, profit, payroll, employees, cit_estimate, vat_estimate, pension_estimate, nsitf_estimate, itf_estimate, total_obligations, calculated_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) RETURNING id`,
+      [company_id, revenue || 0, profit || 0, payroll || 0, employees || 0, cit_estimate || 0, vat_estimate || 0, pension_estimate || 0, nsitf_estimate || 0, itf_estimate || 0, total_obligations || 0, calculated_at]
+    );
+    res.json({ id: result.rows[0].id, success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // --- LOCAL LEGAL ENGINE RESPONSES ---
 function generateLocalLegalResponse(query, profile) {
   const q = query.toLowerCase();
@@ -573,7 +756,7 @@ cron.schedule("0 * * * *", async () => {
   console.log("[BACKGROUND WORKER] Scanning corporate database for filing deadlines...");
   try {
     const result = await pool.query("SELECT * FROM companies");
-    result.rows.forEach(r => {
+    for (const r of result.rows) {
       const company = {
         id: r.id,
         name: r.name,
@@ -587,18 +770,37 @@ cron.schedule("0 * * * *", async () => {
         hasScuml: r.has_scuml === 1
       };
       
-      const CURRENT_DATE = new Date("2026-07-11T16:28:24+01:00");
+      const CURRENT_DATE = new Date();
       const timelines = calculateTimelines(company, CURRENT_DATE);
+
+      // Get existing filings to skip compliant items
+      const filingsResult = await pool.query("SELECT timeline_id FROM company_filings WHERE company_id = $1", [company.id]);
+      const filedIds = new Set(filingsResult.rows.map(f => f.timeline_id));
+
       let score = 100;
-      timelines.forEach(t => {
-        if (t.status === "overdue") score -= t.scoreImpact;
-      });
+      for (const t of timelines) {
+        if (filedIds.has(t.id)) continue;
+        if (t.status === "overdue") {
+          score -= t.scoreImpact;
+          // Check for duplicate notification before inserting
+          const existing = await pool.query(
+            "SELECT id FROM notifications WHERE company_id = $1 AND message LIKE $2 AND created_at > $3",
+            [company.id, `%${t.id}%`, CURRENT_DATE.toISOString().split('T')[0]]
+          );
+          if (existing.rows.length === 0) {
+            await pool.query(
+              "INSERT INTO notifications (company_id, type, message, created_at) VALUES ($1, $2, $3, $4)",
+              [company.id, "warning", `OVERDUE: ${t.name} was due on ${t.dueDate}. Penalty risk: ${t.scoreImpact}% score impact. [${t.id}]`, CURRENT_DATE.toISOString()]
+            );
+          }
+        }
+      }
       const dnfbps = ["Real Estate", "Professional Services", "General Trade"];
-      if (dnfbps.includes(company.sector) && company.hasScuml === 0) score -= 15;
+      if (dnfbps.includes(company.sector) && !company.hasScuml) score -= 15;
       score = Math.max(score, 10);
       
       console.log(`[BACKGROUND WORKER] Company: ${company.name} | Compliance Score: ${score}% | Overdue checks complete.`);
-    });
+    }
   } catch (err) {
     console.error("[BACKGROUND WORKER] Failed to scan database:", err.message);
   }
